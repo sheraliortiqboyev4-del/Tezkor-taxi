@@ -3,6 +3,26 @@ const { Telegraf, Scenes, session, Markup } = require('telegraf');
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
+const express = require('express');
+const axios = require('axios');
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Health check endpoint
+app.get('/', (req, res) => res.send('Bot is running!'));
+
+app.listen(port, () => {
+    console.log(`Keep-alive server listening on port ${port}`);
+});
+
+// Self-ping to prevent sleep (Render/Heroku/Railway)
+setInterval(() => {
+    const url = process.env.WEB_URL;
+    if (url) {
+        axios.get(url).then(() => console.log('Self-ping successful')).catch(err => console.error('Self-ping failed:', err.message));
+    }
+}, 10 * 60 * 1000); // Every 10 minutes
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const ADMIN_ID = parseInt(process.env.ADMIN_ID);
