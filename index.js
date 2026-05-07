@@ -167,12 +167,31 @@ const registrationScene = new Scenes.WizardScene(
             ]).resize());
             return ctx.wizard.next();
         } else {
-            ctx.reply('Илтимос, телефон рақамингизни тугма орқали юборинг.');
+            const text = ctx.message.text;
+            if (text === '/start' || text === '/menu' || text === '🏠 Бош саҳифа') {
+                await ctx.scene.leave();
+                return startBot(ctx);
+            }
+            await ctx.reply('Илтимос, телефон рақамингизни тугма орқали юборинг.', Markup.keyboard([
+                [Markup.button.contactRequest('📞 Телефон рақамни юбориш')]
+            ]).resize());
         }
     },
     async (ctx, next) => {
         if (!ctx.message || !ctx.message.text) return next();
-        const role = ctx.message.text;
+        const text = ctx.message.text;
+
+        // Global buttons/commands
+        if (text === '/start' || text === '/menu' || text === '🏠 Бош саҳифа') {
+            await ctx.scene.leave();
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (user && user.role === 'passenger') return ctx.scene.enter('PASSENGER_SCENE');
+            if (user && user.role === 'driver' && user.verified) return ctx.reply('Хайдовчи менюси:', driverMenu);
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+
+        const role = text;
         if (role === '👤 Йўловчи') {
             const data = getData();
             data.users[ctx.from.id] = {
@@ -235,7 +254,9 @@ const registrationScene = new Scenes.WizardScene(
             );
             return ctx.scene.leave();
         } else {
-            ctx.reply('Илтимос, тугмалардан бирини танланг.');
+            await ctx.reply('Илтимос, тугмалардан бирини танланг.', Markup.keyboard([
+                ['👤 Йўловчи', '🚖 Хайдовчи']
+            ]).resize());
         }
     }
 );
@@ -275,7 +296,7 @@ const passengerScene = new Scenes.WizardScene(
             ]).resize());
             return ctx.wizard.next();
         }
-        ctx.reply('Илтимос, тугмалардан бирини танланг.');
+        ctx.reply('Илтимос, тугмалардан бирини танланг.', passengerMenu);
     },
     async (ctx, next) => {
         if (!ctx.message || !ctx.message.text) return next();
@@ -295,7 +316,13 @@ const passengerScene = new Scenes.WizardScene(
             ]).resize());
             return ctx.wizard.next();
         }
-        ctx.reply('Илтимос, вилоятни танланг.');
+        ctx.reply('Илтимос, вилоятни танланг.', Markup.keyboard([
+            ...regions.reduce((acc, curr, i) => {
+                if (i % 2 === 0) acc.push([curr, regions[i + 1] || '']);
+                return acc;
+            }, []),
+            ['🏠 Бош саҳифа']
+        ]).resize());
     },
     async (ctx, next) => {
         if (!ctx.message || !ctx.message.text) return next();
@@ -309,7 +336,13 @@ const passengerScene = new Scenes.WizardScene(
             await ctx.reply(`Илтимос буюртма ҳақида бироз малумот беринг!\n\nМисол учун: Соат 09:00 да ${ctx.wizard.state.from_region}дан ${ctx.wizard.state.to_region}га чиқиб кетишим кеrak 1 киши`, Markup.keyboard([['🏠 Бош саҳифа']]).resize());
             return ctx.wizard.next();
         }
-        ctx.reply('Илтимос, вилоятни танланг.');
+        ctx.reply('Илтимос, вилоятни танланг.', Markup.keyboard([
+            ...regions.filter(r => r !== ctx.wizard.state.from_region).reduce((acc, curr, i, arr) => {
+                if (i % 2 === 0) acc.push([curr, arr[i + 1] || '']);
+                return acc;
+            }, []),
+            ['🏠 Бош саҳифа']
+        ]).resize());
     },
     async (ctx, next) => {
         if (!ctx.message || !ctx.message.text) return next();
@@ -571,7 +604,77 @@ const adminSettingsScene = new Scenes.WizardScene(
 );
 
 const stage = new Scenes.Stage([registrationScene, passengerScene, directionScene, broadcastScene, supportReplyScene, supportScene, adminSettingsScene]);
+
+// Global handlers for all scenes to allow breaking out
+stage.start(async (ctx) => {
+    await ctx.scene.leave();
+    return startBot(ctx);
+});
+
+stage.command('menu', async (ctx) => {
+    await ctx.scene.leave();
+    return showMenu(ctx);
+});
+
+stage.hears('🏠 Бош саҳифа', async (ctx) => {
+    await ctx.scene.leave();
+    return showMenu(ctx);
+});
+
+stage.hears('🔄 Ролни ўзгартириш', async (ctx) => {
+    await ctx.scene.leave();
+    return ctx.scene.enter('REGISTRATION_SCENE');
+});
+
 bot.use(session());
+
+async function startBot(ctx) {
+    if (ctx.from.id === ADMIN_ID) {
+        return ctx.reply('Хуш келибсиз, Админ!', adminMenu);
+    }
+
+    const data = getData();
+    const user = data.users[ctx.from.id];
+    
+    if (user) {
+        if (user.role === 'passenger') {
+            return ctx.scene.enter('PASSENGER_SCENE');
+        } else if (user.role === 'driver') {
+            if (!user.verified) {
+                // Re-notify admin if they press start again
+                const applicationText = `🚖 ХАЙДОВЧИЛИК АРИЗАСИ (ҚАЙТА)\n\n👤 Исм: ${user.name}\n📞 Тел: ${user.phone}\n🆔 ID: ${user.id}\n\nУшбу хайдовчи тасдиқланишини кутмоқда.`;
+                bot.telegram.sendMessage(ADMIN_ID, applicationText, Markup.inlineKeyboard([
+                    [
+                        Markup.button.callback('✅ Тасдиқлаш', `verify_${user.id}`),
+                        Markup.button.callback('❌ Рад этиш', `reject_${user.id}`)
+                    ]
+                ])).catch(e => console.error('Error re-notifying admin:', e.message));
+
+                return ctx.reply('Аризангиз ҳали тасдиқланмаган. Илтимос кутинг.', Markup.removeKeyboard());
+            }
+            if (!user.directions || user.directions.length === 0) {
+                return ctx.reply(
+                    `Ассалому алайкум Хайдовчи ${user.name}!\n\n⚠️ Сиз ҳали биронта йўналиш танламагансиз. Йўналиш танламасангиз сизга буюртмалар келмайди.\n\nИлтимос, "📍 Йўналишларни созлаш" тугмаси орқали йўналишларни қўшинг.`,
+                    driverMenu
+                );
+            }
+            return ctx.reply(`Ассалому алайкум Хайдовчи ${user.name}!\n\nКеракли бўлимни танланг:`, driverMenu);
+        }
+    }
+    
+    return ctx.scene.enter('REGISTRATION_SCENE');
+}
+
+async function showMenu(ctx) {
+    if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
+    const data = getData();
+    const user = data.users[ctx.from.id];
+    if (user) {
+        if (user.role === 'driver' && user.verified) return ctx.reply('Хайдовчи менюси:', driverMenu);
+        if (user.role === 'passenger') return ctx.scene.enter('PASSENGER_SCENE');
+    }
+    return ctx.scene.enter('REGISTRATION_SCENE');
+}
 
 // Middleware for mandatory subscription
 bot.use(async (ctx, next) => {
@@ -622,53 +725,11 @@ bot.action('check_sub', async (ctx) => {
 bot.use(stage.middleware());
 
 bot.start(async (ctx) => {
-    try { await ctx.scene.leave(); } catch (e) {}
-    if (ctx.from.id === ADMIN_ID) {
-        return ctx.reply('Хуш келибсиз, Админ!', adminMenu);
-    }
-
-    const data = getData();
-    const user = data.users[ctx.from.id];
-    
-    if (user) {
-        if (user.role === 'passenger') {
-            return ctx.scene.enter('PASSENGER_SCENE');
-        } else if (user.role === 'driver') {
-            if (!user.verified) {
-                // Re-notify admin if they press start again
-                const applicationText = `🚖 ХАЙДОВЧИЛИК АРИЗАСИ (ҚАЙТА)\n\n👤 Исм: ${user.name}\n📞 Тел: ${user.phone}\n🆔 ID: ${user.id}\n\nУшбу хайдовchi тасдиқланишини кутмоқда.`;
-                bot.telegram.sendMessage(ADMIN_ID, applicationText, Markup.inlineKeyboard([
-                    [
-                        Markup.button.callback('✅ Тасдиқлаш', `verify_${user.id}`),
-                        Markup.button.callback('❌ Рад этиш', `reject_${user.id}`)
-                    ]
-                ])).catch(e => console.error('Error re-notifying admin:', e.message));
-
-                return ctx.reply('Аризангиз ҳали тасдиқланмаган. Илтимос кутинг.', Markup.removeKeyboard());
-            }
-            if (!user.directions || user.directions.length === 0) {
-                return ctx.reply(
-                    `Ассалому алайкум Хайдовчи ${user.name}!\n\n⚠️ Сиз ҳали биронta йўналиш танламагансиз. Йўналиш танламасангиз сизга буюртмалар келмайди.\n\nИлтимос, "📍 Йўналишларни созлаш" тугмаси орqali йўналишларни қўшинг.`,
-                    driverMenu
-                );
-            }
-            return ctx.reply(`Ассалому алайкум Хайдовчи ${user.name}!\n\nКеракли бўлимни танланг:`, driverMenu);
-        }
-    }
-    
-    return ctx.scene.enter('REGISTRATION_SCENE');
+    return startBot(ctx);
 });
 
 bot.command('menu', async (ctx) => {
-    try { await ctx.scene.leave(); } catch (e) {}
-    if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
-    const data = getData();
-    const user = data.users[ctx.from.id];
-    if (user) {
-        if (user.role === 'driver' && user.verified) return ctx.reply('Хайдовчи менюси:', driverMenu);
-        if (user.role === 'passenger') return ctx.scene.enter('PASSENGER_SCENE');
-    }
-    return ctx.scene.enter('REGISTRATION_SCENE');
+    return showMenu(ctx);
 });
 
 bot.help((ctx) => {
