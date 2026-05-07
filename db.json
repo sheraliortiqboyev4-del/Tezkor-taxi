@@ -1,0 +1,335 @@
+{
+  "users": {
+    "8290819594": {
+      "id": 8290819594,
+      "name": "𝐎𝐰𝐧𝐞𝐫",
+      "phone": "+998998910741",
+      "role": "passenger",
+      "verified": true,
+      "directions": [],
+      "stats": {
+        "completed": 0
+      }
+    },
+    "8710938673": {
+      "id": 8710938673,
+      "name": "Paradox",
+      "phone": "+2348052335793",
+      "role": "driver",
+      "verified": true,
+      "directions": [
+        "Toshkent-Namangan",
+        "Toshkent-Andijon"
+      ],
+      "stats": {
+        "completed": 2
+      }
+    },
+    "7261270272": {
+      "id": 7261270272,
+      "name": "꧁☬ 𝓐𝔃𝓲𝓶𝓳𝓸𝓷 ☬꧂",
+      "phone": "+998993929233",
+      "role": "passenger",
+      "verified": true,
+      "directions": [],
+      "stats": {
+        "completed": 0
+      }
+    },
+    "7981925015": {
+      "id": 7981925015,
+      "name": ".",
+      "phone": "+998990905449",
+      "role": "passenger",
+      "verified": true,
+      "directions": [],
+      "stats": {
+        "completed": 0
+      }
+    }
+  },
+  "orders": [
+    {
+      "id": 1778132300352,
+      "userId": 8290819594,
+      "userName": "𝐎𝐰𝐧𝐞𝐫",
+      "userPhone": "+998998910741",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Namangan",
+      "details": "Соат 09:00 да Toshkentдан Namanganга чиқиб кетишим керак 1 киши",
+      "status": "pending",
+      "driverMessages": []
+    },
+    {
+      "id": 1778132829461,
+      "userId": 8290819594,
+      "userName": "𝐎𝐰𝐧𝐞𝐫",
+      "userPhone": "+998998910741",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Namangan",
+      "details": "Соат 09:00 да Toshkentдан Namanganга чиқиб кетишим керак 1 киши",
+      "status": "pending",
+      "driverMessages": [],
+      "driverId": null,
+      "driverName": null,
+      "driverPhone": null
+    },
+    {
+      "id": 1778133370246,
+      "userId": 8290819594,
+      "userName": "𝐎𝐰𝐧𝐞𝐫",
+      "userPhone": "+998998910741",
+      "type": "🚕 Сафар",
+      "from": "Toshkent",
+      "to": "Samarqand",
+      "details": "1",
+      "status": "pending",
+      "driverMessages": [
+        {
+          "chatId": 8710938673,
+          "messageId": 65
+        }
+      ]
+    },
+    {
+      "id": 1778134755611,
+      "userId": 7261270272,
+      "userName": "꧁☬ 𝓐𝔃𝓲𝓶𝓳𝓸𝓷 ☬꧂",
+      "userPhone": "+998993929233",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Namangan",
+      "details": "1kishi",
+      "status": "pending",
+      "driverMessages": []
+    },
+    {
+      "id": 1778134885441,
+      "userId": 7261270272,
+      "userName": "꧁☬ 𝓐𝔃𝓲𝓶𝓳𝓸𝓷 ☬꧂",
+      "userPhone": "+998993929233",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Andijon",
+      "details": "1kshi",
+      "status": "pending",
+      "driverMessages": [],
+      "driverId": null,
+      "driverName": null,
+      "driverPhone": null
+    },
+    {
+      "id": 1778135630584,
+      "userId": 7261270272,
+      "userName": "꧁☬ 𝓐𝔃𝓲𝓶𝓳𝓸𝓷 ☬꧂",
+      "userPhone": "+998993929233",
+      "type": "📦 Почта бор",
+      "from": "Toshkent",
+      "to": "Andijon",
+      "details": "1",
+      "status": "completed",
+      "driverMessages": [
+        {
+          "chatId": 8710938673,
+          "messageId": 218
+        }
+      ],
+      "driverId": 8710938673,
+      "driverName": "Paradox",
+      "driverPhone": "+2348052335793"
+    },
+    {
+      "id": 1778136329581,
+      "userId": 8290819594,
+      "userName": "𝐎𝐰𝐧𝐞𝐫",
+      "userPhone": "+998998910741",
+      "type": "🚕 Йўловчиман",
+      "from": "Sirdaryo",
+      "to": "Jizzax",
+      "details": "/menu",
+      "status": "pending",
+      "driverMessages": []
+    },
+    {
+      "id": 1778137341319,
+      "userId": 7261270272,
+      "userName": "꧁☬ 𝓐𝔃𝓲𝓶𝓳𝓸𝓷 ☬꧂",
+      "userPhone": "+998993929233",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Farg'ona",
+      "details": "a",
+      "status": "pending",
+      "driverMessages": []
+    },
+    {
+      "id": 1778137387065,
+      "userId": 7261270272,
+      "userName": "꧁☬ 𝓐𝔃𝓲𝓶𝓳𝓸𝓷 ☬꧂",
+      "userPhone": "+998993929233",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Namangan",
+      "details": "q",
+      "status": "completed",
+      "driverMessages": [
+        {
+          "chatId": 8710938673,
+          "messageId": 468
+        }
+      ],
+      "driverId": 8710938673,
+      "driverName": "Paradox",
+      "driverPhone": "+2348052335793"
+    },
+    {
+      "id": 1778137584340,
+      "userId": 7261270272,
+      "userName": "꧁☬ 𝓐𝔃𝓲𝓶𝓳𝓸𝓷 ☬꧂",
+      "userPhone": "+998993929233",
+      "type": "🚕 Йўловчиман",
+      "from": "Sirdaryo",
+      "to": "Toshkent",
+      "details": "1",
+      "status": "pending",
+      "driverMessages": [
+        {
+          "chatId": 8710938673,
+          "messageId": 487
+        }
+      ]
+    },
+    {
+      "id": 1778139852191,
+      "userId": 7981925015,
+      "userName": ".",
+      "userPhone": "+998990905449",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Namangan",
+      "details": "1",
+      "status": "completed",
+      "driverMessages": [],
+      "driverId": 8710938673,
+      "driverName": "Paradox",
+      "driverPhone": "+2348052335793"
+    },
+    {
+      "id": 1778140915632,
+      "userId": 7981925015,
+      "userName": ".",
+      "userPhone": "+998990905449",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Namangan",
+      "details": "we",
+      "status": "completed",
+      "driverMessages": [
+        {
+          "chatId": 8710938673,
+          "messageId": 764
+        }
+      ],
+      "driverId": 8710938673,
+      "driverName": "Paradox",
+      "driverPhone": "+2348052335793"
+    },
+    {
+      "id": 1778141261716,
+      "userId": 7981925015,
+      "userName": ".",
+      "userPhone": "+998990905449",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Namangan",
+      "details": "ad",
+      "status": "completed",
+      "driverMessages": [
+        {
+          "chatId": 8710938673,
+          "messageId": 806
+        }
+      ],
+      "driverId": 8710938673,
+      "driverName": "Paradox",
+      "driverPhone": "+2348052335793"
+    },
+    {
+      "id": 1778141300771,
+      "userId": 7981925015,
+      "userName": ".",
+      "userPhone": "+998990905449",
+      "type": "🚕 Йўловчиман",
+      "from": "Namangan",
+      "to": "Toshkent",
+      "details": "gd",
+      "status": "pending",
+      "driverMessages": []
+    },
+    {
+      "id": 1778141320785,
+      "userId": 7981925015,
+      "userName": ".",
+      "userPhone": "+998990905449",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Andijon",
+      "details": "ug",
+      "status": "pending",
+      "driverMessages": [
+        {
+          "chatId": 8710938673,
+          "messageId": 835
+        }
+      ]
+    },
+    {
+      "id": 1778146268279,
+      "userId": 7981925015,
+      "userName": ".",
+      "userPhone": "+998990905449",
+      "type": "🚕 Йўловчиман",
+      "from": "Toshkent",
+      "to": "Namangan",
+      "details": "10 k",
+      "status": "completed",
+      "driverMessages": [
+        {
+          "chatId": 8710938673,
+          "messageId": 1025
+        }
+      ],
+      "driverId": 8710938673,
+      "driverName": "Paradox",
+      "driverPhone": "+2348052335793"
+    },
+    {
+      "id": 1778146288886,
+      "userId": 7981925015,
+      "userName": ".",
+      "userPhone": "+998990905449",
+      "type": "🚕 Йўловчиман",
+      "from": "Namangan",
+      "to": "Toshkent",
+      "details": "1",
+      "status": "completed",
+      "driverMessages": [
+        {
+          "chatId": 8710938673,
+          "messageId": 1037
+        }
+      ],
+      "driverId": 8710938673,
+      "driverName": "Paradox",
+      "driverPhone": "+2348052335793"
+    }
+  ],
+  "settings": {
+    "channel_id": "-1003929498731",
+    "force_subscribe": true,
+    "about_channel_url": "https://t.me/tezkor_taxi_official",
+    "sub_channel_url": "https://t.me/tezkor_taxi_official"
+  }
+}
