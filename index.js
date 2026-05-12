@@ -122,7 +122,7 @@ const regions = [
 const driverMenu = Markup.keyboard([
     ['📋 Менинг буюртмаларим', '📊 Статистика'],
     ['📍 Йўналишларни созлаш', '🔄 Ролни ўзгартириш'],
-    ['🤖 Бот ҳақида', '🏠 Бош саҳифа']
+    ['🤖 Бот ҳақида']
 ]).resize();
 
 const adminMenu = Markup.keyboard([
@@ -133,7 +133,6 @@ const adminMenu = Markup.keyboard([
 const passengerMenu = Markup.keyboard([
     ['🚕 Янги буюртма', '📋 Менинг буюртмаларим'],
     ['🔄 Ролни ўзгартириш', '🤖 Бот ҳақида'],
-    ['🏠 Бош саҳифа']
 ]).resize();
 
 // Scenes
@@ -259,12 +258,12 @@ const passengerScene = new Scenes.WizardScene(
         if (text === '📋 Менинг буюртмаларим') return; // Handled by bot.hears
         if (text === '🚕 Янги буюртма') {
             await ctx.reply('Йўловчимисиз ёki Почта юборасизми?', Markup.keyboard([
-                ['🚕 Йўловчиман', '📦 Почта бор'],
+                ['🚕 Йўловчи', '📦 Почта'],
                 ['🏠 Бош саҳифа']
             ]).resize());
             return; // Stay in this step to get the type
         }
-        if (text === '🚕 Йўловчиман' || text === '📦 Почта бор') {
+        if (text === '🚕 Йўловчи' || text === '📦 Почта') {
             ctx.wizard.state.type = text;
             await ctx.reply('Қаердан йўлга чиқасиз?', Markup.keyboard([
                 ...regions.reduce((acc, curr, i) => {
@@ -306,10 +305,37 @@ const passengerScene = new Scenes.WizardScene(
         }
         if (regions.includes(text)) {
             ctx.wizard.state.to_region = text;
-            await ctx.reply(`Илтимос буюртма ҳақида бироз малумот беринг!\n\nМисол учун: Соат 09:00 да ${ctx.wizard.state.from_region}дан ${ctx.wizard.state.to_region}га чиқиб кетишим кеrak 1 киши`, Markup.keyboard([['🏠 Бош саҳифа']]).resize());
-            return ctx.wizard.next();
+            
+            if (ctx.wizard.state.type === '📦 Почта') {
+                await ctx.reply('Берган Заказингиз Тўғрими ?', Markup.keyboard([
+                    ['Документ 📄', 'Каробка 📦'],
+                    ['Багаж 🧳', 'Қиммат Бахо Буюм 💎'],
+                    ['Бошқа...'],
+                    ['🏠 Бош саҳифа']
+                ]).resize());
+                return ctx.wizard.next();
+            } else {
+                await ctx.reply(`Илтимос буюртма ҳақида бироз малумот беринг!\n\nМисол учун: Соат 09:00 да ${ctx.wizard.state.from_region}дан ${ctx.wizard.state.to_region}га чиқиб кетишим кеrak 1 киши`, Markup.keyboard([['🏠 Бош саҳифа']]).resize());
+                return ctx.wizard.selectStep(5);
+            }
         }
         ctx.reply('Илтимос, вилоятни танланг.');
+    },
+    async (ctx, next) => {
+        if (!ctx.message || !ctx.message.text) return next();
+        const text = ctx.message.text;
+        if (text === '🏠 Бош саҳифа') {
+            if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        
+        const validPackageTypes = ['Документ 📄', 'Каробка 📦', 'Багаж 🧳', 'Қиммат Бахо Буюм 💎', 'Бошқа...'];
+        if (validPackageTypes.includes(text)) {
+            ctx.wizard.state.packageType = text;
+            await ctx.reply(`Илтимос буюртма ҳақида бироз малумот беринг!`, Markup.keyboard([['🏠 Бош саҳифа']]).resize());
+            return ctx.wizard.next();
+        }
+        ctx.reply('Илтимос, тугмалардан бирини танланг.');
     },
     async (ctx, next) => {
         if (!ctx.message || !ctx.message.text) return next();
@@ -328,9 +354,11 @@ const passengerScene = new Scenes.WizardScene(
             userId: ctx.from.id,
             userName: user.name,
             userPhone: user.phone,
+            username: ctx.from.username ? `@${ctx.from.username}` : '',
             type: ctx.wizard.state.type,
             from: ctx.wizard.state.from_region,
             to: ctx.wizard.state.to_region,
+            packageType: ctx.wizard.state.packageType || '',
             details: details,
             status: 'pending',
             driverMessages: []
@@ -341,7 +369,16 @@ const passengerScene = new Scenes.WizardScene(
 
         await ctx.reply('Буюртмангиз қабул қилинди! Тез орада шафёрларимиз сизга алоқага чиқишади\n\nЯна буюртма бериш учун /start тугмасини босинг', passengerMenu);
 
-        // Notify matching drivers
+        let driverMessage = `🆕 Янги буюртма! (${order.type})\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}`;
+        if (order.username) {
+            driverMessage += `\n-Username: ${order.username}`;
+        }
+        driverMessage += `\n📍 Йўналиш: ${order.from} ➡️ ${order.to}`;
+        if (order.packageType) {
+            driverMessage += `\n📦 Нимa: ${order.packageType}`;
+        }
+        driverMessage += `\nℹ️ Маълумот: ${order.details}`;
+
         const drivers = Object.values(data.users).filter(u => 
             u.role === 'driver' && 
             u.verified && 
@@ -353,7 +390,7 @@ const passengerScene = new Scenes.WizardScene(
         for (const driver of drivers) {
             try {
                 const msg = await bot.telegram.sendMessage(driver.id, 
-                    `🆕 Янги буюртма! (${order.type})\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                    driverMessage,
                     Markup.inlineKeyboard([
                         [Markup.button.callback('✅ Қабул қилиш', `accept_${order.id}`)],
                         [Markup.button.callback('❌ Ўтказиб юбориш', `ignore_${order.id}`)]
@@ -681,7 +718,7 @@ bot.hears('🚕 Янги буюртма', async (ctx) => {
     if (user && user.role === 'passenger') {
         await ctx.scene.enter('PASSENGER_SCENE');
         return ctx.reply('Йўловчимисиз ёки Почта юборасизми?', Markup.keyboard([
-            ['🚕 Йўловчиман', '📦 Почта бор'],
+            ['🚕 Йўловчи', '📦 Почта'],
             ['🏠 Бош саҳифа']
         ]).resize());
     } else if (user && user.role === 'driver') {
@@ -897,6 +934,16 @@ bot.action(/cancel_order_(.+)/, async (ctx) => {
     bot.telegram.sendMessage(order.userId, `⚠️ Хайдовчи буюртмангизни бекор қилди. Буюртмангиз бошқа хайдовчиларга қайта юборилди.`).catch(e => {});
 
     // Notify other matching drivers
+    let driverMessage = `🔄 Қайта юборилган буюртма! (${order.type})\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}`;
+    if (order.username) {
+        driverMessage += `\n-Username: ${order.username}`;
+    }
+    driverMessage += `\n📍 Йўналиш: ${order.from} ➡️ ${order.to}`;
+    if (order.packageType) {
+        driverMessage += `\n📦 Нимa: ${order.packageType}`;
+    }
+    driverMessage += `\nℹ️ Маълумот: ${order.details}`;
+
     const drivers = Object.values(data.users).filter(u => 
         u.role === 'driver' && 
         u.verified && 
@@ -909,7 +956,7 @@ bot.action(/cancel_order_(.+)/, async (ctx) => {
     for (const driverObj of drivers) {
         try {
             const msg = await bot.telegram.sendMessage(driverObj.id, 
-                `🔄 Қайта юборилган буюртма! (${order.type})\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                driverMessage,
                 Markup.inlineKeyboard([
                     [Markup.button.callback('✅ Қабул қилиш', `accept_${order.id}`)],
                     [Markup.button.callback('❌ Ўтказиб юбориш', `ignore_${order.id}`)]
@@ -1082,11 +1129,19 @@ bot.action(/accept_(.+)/, async (ctx) => {
 
     await ctx.answerCbQuery('Сиз буюртмани қабул қилдингиз!');
 
+    let updatedMessage = `🆕 Янги буюртма! (${order.type})\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}`;
+    if (order.username) {
+        updatedMessage += `\n-Username: ${order.username}`;
+    }
+    updatedMessage += `\n📍 Йўналиш: ${order.from} ➡️ ${order.to}`;
+    if (order.packageType) {
+        updatedMessage += `\n📦 Нимa: ${order.packageType}`;
+    }
+    updatedMessage += `\nℹ️ Маълумот: ${order.details}\n\n⚠️ БУЮРТМА ОЛИНДИ! (Хайдовчи: ${order.driverName})`;
+
     for (const msgInfo of order.driverMessages) {
         try {
-            await bot.telegram.editMessageText(msgInfo.chatId, msgInfo.messageId, null, 
-                `🆕 Янги буюртма! (${order.type})\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n\n⚠️ БУЮРТМА ОЛИНДИ! (Хайдовчи: ${order.driverName})`
-            );
+            await bot.telegram.editMessageText(msgInfo.chatId, msgInfo.messageId, null, updatedMessage);
         } catch (err) {}
     }
 
