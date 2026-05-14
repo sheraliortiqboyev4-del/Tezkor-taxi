@@ -89,6 +89,32 @@ async function initDB() {
             delete state.settings.channel_url;
             needsSave = true;
         }
+        // Migrate existing users - add createdAt, username and stats fields
+        if (state.users) {
+            for (const userId in state.users) {
+                const user = state.users[userId];
+                if (!user.createdAt) {
+                    user.createdAt = new Date().toISOString();
+                    needsSave = true;
+                }
+                if (!user.username) {
+                    user.username = '';
+                    needsSave = true;
+                }
+                if (!user.stats) {
+                    user.stats = { completed: 0 };
+                    needsSave = true;
+                }
+                if (user.role === 'driver' && !user.carModel) {
+                    user.carModel = '';
+                    needsSave = true;
+                }
+                if (user.role === 'driver' && !user.stateNumber) {
+                    user.stateNumber = '';
+                    needsSave = true;
+                }
+            }
+        }
         if (needsSave) {
             await saveData(state);
             console.log('Migrations applied and saved to PostgreSQL');
@@ -121,18 +147,21 @@ const regions = [
 // Keyboards
 const driverMenu = Markup.keyboard([
     ['📋 Менинг буюртмаларим', '📊 Статистика'],
-    ['📍 Йўналишларни созлаш', '🔄 Ролни ўзгартириш'],
-    ['🤖 Бот ҳақида']
+    ['📍 Йўналишларни созлаш', '⚙️ Машина маълумотларини созлаш'],
+    ['🔄 Ролни ўзгартириш', '🤖 Бот ҳақида'],
+    ['🆘 Ёрдам']
 ]).resize();
 
 const adminMenu = Markup.keyboard([
     ['📈 Умумий статистика', '📢 Барчага хабар'],
-    ['⚙️ Созламалар', '🏠 Бош саҳифа']
+    ['⚙️ Созламалар', '🏠 Бош саҳифа'],
+    ['🆘 Ёрдам']
 ]).resize();
 
 const passengerMenu = Markup.keyboard([
     ['🚕 Янги буюртма', '📋 Менинг буюртмаларим'],
     ['🔄 Ролни ўзгартириш', '🤖 Бот ҳақида'],
+    ['🆘 Ёрдам']
 ]).resize();
 
 // Scenes
@@ -197,10 +226,12 @@ const registrationScene = new Scenes.WizardScene(
                 id: ctx.from.id,
                 name: ctx.wizard.state.name,
                 phone: ctx.wizard.state.phone,
+                username: ctx.from.username || '',
                 role: 'passenger',
                 verified: true,
                 directions: [],
-                stats: { completed: 0 }
+                stats: { completed: 0 },
+                createdAt: new Date().toISOString()
             };
             saveData(data);
 
@@ -217,10 +248,14 @@ const registrationScene = new Scenes.WizardScene(
                 id: driverId,
                 name: driverName,
                 phone: driverPhone,
+                username: ctx.from.username || '',
                 role: 'driver',
                 verified: false,
                 directions: [],
-                stats: { completed: 0 }
+                stats: { completed: 0 },
+                createdAt: new Date().toISOString(),
+                carModel: '',
+                stateNumber: ''
             };
             saveData(data);
 
@@ -270,13 +305,62 @@ const passengerScene = new Scenes.WizardScene(
         if (!ctx.message || !ctx.message.text) return next();
         const text = ctx.message.text;
         if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
             if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
             return ctx.scene.enter('REGISTRATION_SCENE');
         }
         if (text === '🔄 Ролни ўзгартириш') {
+            try { await ctx.scene.leave(); } catch (e) {}
             return ctx.scene.enter('REGISTRATION_SCENE');
         }
-        if (text === '📋 Менинг буюртмаларим') return; // Handled by bot.hears
+        if (text === '📋 Менинг буюртмаларим') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (!user) return;
+
+            if (user.role === 'driver') {
+                const myOrders = data.orders.filter(o => o.driverId === ctx.from.id && o.status === 'accepted');
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', driverMenu);
+                
+                myOrders.forEach(order => {
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                        Markup.inlineKeyboard([
+                            [
+                                Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                                Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                            ]
+                        ])
+                    );
+                });
+            } else {
+                const myOrders = data.orders.filter(o => o.userId === ctx.from.id && (o.status === 'pending' || o.status === 'accepted'));
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', passengerMenu);
+
+                myOrders.forEach(order => {
+                    const statusText = order.status === 'pending' ? '⏳ Кутилмоқда' : `✅ Қабул қилинди (Хайдовчи: ${order.driverName})`;
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n📊 Ҳолат: ${statusText}`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('❌ Буюртмани бекор қилиш', `passenger_cancel_${order.id}`)]
+                        ])
+                    );
+                });
+            }
+            return;
+        }
+        if (text === '🤖 Бот ҳақида') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.reply(
+                `🤖 Бот ҳақида:\n\nТезкор Taxi - тез ва қулай такси хизмати!\n\nБизнинг хизматларимиз:\n- 🚕 Йўловчи хизмати\n- 📦 Почта хизмати\n\n📞 Қўллаб-quvvatlash: ${settings.support_phone || 'Кўрсатилмаган'}`,
+                passengerMenu
+            );
+        }
+        if (text === '🆘 Ёрдам') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('SUPPORT_SCENE');
+        }
         if (text === '🚕 Янги буюртма') {
             await ctx.reply('Йўловчимисиз ёki Почта юборасизми?', Markup.keyboard([
                 ['🚕 Йўловчи', '📦 Почта'],
@@ -301,8 +385,69 @@ const passengerScene = new Scenes.WizardScene(
         if (!ctx.message || !ctx.message.text) return next();
         const text = ctx.message.text;
         if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
             if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
             return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '🔄 Ролни ўзгартириш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '📋 Менинг буюртмаларим') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (!user) return;
+
+            if (user.role === 'driver') {
+                const myOrders = data.orders.filter(o => o.driverId === ctx.from.id && o.status === 'accepted');
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', driverMenu);
+                
+                myOrders.forEach(order => {
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                        Markup.inlineKeyboard([
+                            [
+                                Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                                Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                            ]
+                        ])
+                    );
+                });
+            } else {
+                const myOrders = data.orders.filter(o => o.userId === ctx.from.id && (o.status === 'pending' || o.status === 'accepted'));
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', passengerMenu);
+
+                myOrders.forEach(order => {
+                    const statusText = order.status === 'pending' ? '⏳ Кутилмоқда' : `✅ Қабул қилинди (Хайдовчи: ${order.driverName})`;
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n📊 Ҳолат: ${statusText}`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('❌ Буюртмани бекор қилиш', `passenger_cancel_${order.id}`)]
+                        ])
+                    );
+                });
+            }
+            return;
+        }
+        if (text === '🤖 Бот ҳақида') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.reply(
+                `🤖 Бот ҳақида:\n\nТезкор Taxi - тез ва қулай такси хизмати!\n\nБизнинг хизматларимиз:\n- 🚕 Йўловчи хизмати\n- 📦 Почта хизмати\n\n📞 Қўллаб-quvvatlash: ${settings.support_phone || 'Кўрсатилмаган'}`,
+                passengerMenu
+            );
+        }
+        if (text === '🆘 Ёрдам') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('SUPPORT_SCENE');
+        }
+        if (text === '🚕 Янги буюртма') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            await ctx.reply('Йўловчимисиз ёки Почта юборасизми?', Markup.keyboard([
+                ['🚕 Йўловчи', '📦 Почта'],
+                ['🏠 Бош саҳифа']
+            ]).resize());
+            return ctx.scene.enter('PASSENGER_SCENE');
         }
         if (regions.includes(text)) {
             ctx.wizard.state.from_region = text;
@@ -327,8 +472,69 @@ const passengerScene = new Scenes.WizardScene(
         if (!ctx.message || !ctx.message.text) return next();
         const text = ctx.message.text;
         if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
             if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
             return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '🔄 Ролни ўзгартириш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '📋 Менинг буюртмаларим') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (!user) return;
+
+            if (user.role === 'driver') {
+                const myOrders = data.orders.filter(o => o.driverId === ctx.from.id && o.status === 'accepted');
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', driverMenu);
+                
+                myOrders.forEach(order => {
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                        Markup.inlineKeyboard([
+                            [
+                                Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                                Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                            ]
+                        ])
+                    );
+                });
+            } else {
+                const myOrders = data.orders.filter(o => o.userId === ctx.from.id && (o.status === 'pending' || o.status === 'accepted'));
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', passengerMenu);
+
+                myOrders.forEach(order => {
+                    const statusText = order.status === 'pending' ? '⏳ Кутилмоқда' : `✅ Қабул қилинди (Хайдовчи: ${order.driverName})`;
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n📊 Ҳолат: ${statusText}`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('❌ Буюртмани бекор қилиш', `passenger_cancel_${order.id}`)]
+                        ])
+                    );
+                });
+            }
+            return;
+        }
+        if (text === '🤖 Бот ҳақида') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.reply(
+                `🤖 Бот ҳақида:\n\nТезкор Taxi - тез ва қулай такси хизмати!\n\nБизнинг хизматларимиз:\n- 🚕 Йўловчи хизмати\n- 📦 Почта хизмати\n\n📞 Қўллаб-quvvatlash: ${settings.support_phone || 'Кўрсатилмаган'}`,
+                passengerMenu
+            );
+        }
+        if (text === '🆘 Ёрдам') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('SUPPORT_SCENE');
+        }
+        if (text === '🚕 Янги буюртма') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            await ctx.reply('Йўловчимисиз ёки Почта юборасизми?', Markup.keyboard([
+                ['🚕 Йўловчи', '📦 Почта'],
+                ['🏠 Бош саҳифа']
+            ]).resize());
+            return ctx.scene.enter('PASSENGER_SCENE');
         }
         if (regions.includes(text)) {
             ctx.wizard.state.to_region = text;
@@ -358,8 +564,69 @@ const passengerScene = new Scenes.WizardScene(
         if (!ctx.message || !ctx.message.text) return next();
         const text = ctx.message.text;
         if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
             if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
             return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '🔄 Ролни ўзгартириш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '📋 Менинг буюртмаларим') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (!user) return;
+
+            if (user.role === 'driver') {
+                const myOrders = data.orders.filter(o => o.driverId === ctx.from.id && o.status === 'accepted');
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', driverMenu);
+                
+                myOrders.forEach(order => {
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                        Markup.inlineKeyboard([
+                            [
+                                Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                                Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                            ]
+                        ])
+                    );
+                });
+            } else {
+                const myOrders = data.orders.filter(o => o.userId === ctx.from.id && (o.status === 'pending' || o.status === 'accepted'));
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', passengerMenu);
+
+                myOrders.forEach(order => {
+                    const statusText = order.status === 'pending' ? '⏳ Кутилмоқда' : `✅ Қабул қилинди (Хайдовчи: ${order.driverName})`;
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n📊 Ҳолат: ${statusText}`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('❌ Буюртмани бекор қилиш', `passenger_cancel_${order.id}`)]
+                        ])
+                    );
+                });
+            }
+            return;
+        }
+        if (text === '🤖 Бот ҳақида') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.reply(
+                `🤖 Бот ҳақида:\n\nТезкор Taxi - тез ва қулай такси хизмати!\n\nБизнинг хизматларимиз:\n- 🚕 Йўловчи хизмати\n- 📦 Почта хизмати\n\n📞 Қўллаб-quvvatlash: ${settings.support_phone || 'Кўрсатилмаган'}`,
+                passengerMenu
+            );
+        }
+        if (text === '🆘 Ёрдам') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('SUPPORT_SCENE');
+        }
+        if (text === '🚕 Янги буюртма') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            await ctx.reply('Йўловчимисиз ёки Почта юборасизми?', Markup.keyboard([
+                ['🚕 Йўловчи', '📦 Почта'],
+                ['🏠 Бош саҳифа']
+            ]).resize());
+            return ctx.scene.enter('PASSENGER_SCENE');
         }
         
         const validPackageTypes = ['Документ 📄', 'Каробка 📦', 'Багаж 🧳', 'Қиммат Бахо Буюм 💎', 'Бошқа...'];
@@ -374,68 +641,104 @@ const passengerScene = new Scenes.WizardScene(
         if (!ctx.message || !ctx.message.text) return next();
         const text = ctx.message.text;
         if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
             if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
             return ctx.scene.enter('REGISTRATION_SCENE');
         }
         
-        const details = text;
-        const data = getData();
-        const user = data.users[ctx.from.id];
+        ctx.wizard.state.details = text;
         
-        const order = {
-            id: Date.now(),
-            userId: ctx.from.id,
-            userName: user.name,
-            userPhone: user.phone,
-            username: ctx.from.username ? `@${ctx.from.username}` : '',
-            type: ctx.wizard.state.type,
-            from: ctx.wizard.state.from_region,
-            to: ctx.wizard.state.to_region,
-            packageType: ctx.wizard.state.packageType || '',
-            details: details,
-            status: 'pending',
-            driverMessages: []
-        };
-
-        data.orders.push(order);
-        saveData(data);
-
-        await ctx.reply('Буюртмангиз қабул қилинди! Тез орада шафёрларимиз сизга алоқага чиқишади\n\nЯна буюртма бериш учун /start тугмасини босинг', passengerMenu);
-
-        let driverMessage = `🆕 Янги буюртма! (${order.type})\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}`;
-        if (order.username) {
-            driverMessage += `\n-Username: ${order.username}`;
+        let confirmationText = `📋 Буюртма маълумотлари:\n\n`;
+        confirmationText += `📎 Тур: ${ctx.wizard.state.type}\n`;
+        confirmationText += `📍 Йўналиш: ${ctx.wizard.state.from_region} ➡️ ${ctx.wizard.state.to_region}\n`;
+        if (ctx.wizard.state.packageType) {
+            confirmationText += `📦 Нимa: ${ctx.wizard.state.packageType}\n`;
         }
-        driverMessage += `\n📍 Йўналиш: ${order.from} ➡️ ${order.to}`;
-        if (order.packageType) {
-            driverMessage += `\n📦 Нимa: ${order.packageType}`;
-        }
-        driverMessage += `\nℹ️ Маълумот: ${order.details}`;
+        confirmationText += `ℹ️ Маълумот: ${ctx.wizard.state.details}\n\n`;
+        confirmationText += `Буюртма маълумотлари тўғрими?`;
+        
+        await ctx.reply(confirmationText, Markup.inlineKeyboard([
+            [Markup.button.callback('✅ Ҳа, тўғри', 'confirm_order_yes')],
+            [Markup.button.callback('❌ Йўқ, қайта ёзиш', 'confirm_order_no')]
+        ]));
+        
+        return ctx.wizard.next();
+    },
+    async (ctx, next) => {
+        if (ctx.callbackQuery) {
+            const callbackData = ctx.callbackQuery.data;
+            
+            if (callbackData === 'confirm_order_no') {
+                await ctx.answerCbQuery('Буюртма бекор қилинди.');
+                await ctx.editMessageText('Буюртма бекор қилинди.');
+                return ctx.scene.enter('PASSENGER_SCENE');
+            }
+            
+            if (callbackData === 'confirm_order_yes') {
+                await ctx.answerCbQuery('Буюртма қабул қилинди!');
+                
+                const data = getData();
+                const user = data.users[ctx.from.id];
+                
+                const order = {
+                    id: Date.now(),
+                    userId: ctx.from.id,
+                    userName: user.name,
+                    userPhone: user.phone,
+                    username: ctx.from.username ? `@${ctx.from.username}` : '',
+                    type: ctx.wizard.state.type,
+                    from: ctx.wizard.state.from_region,
+                    to: ctx.wizard.state.to_region,
+                    packageType: ctx.wizard.state.packageType || '',
+                    details: ctx.wizard.state.details,
+                    status: 'pending',
+                    driverMessages: []
+                };
 
-        const drivers = Object.values(data.users).filter(u => 
-            u.role === 'driver' && 
-            u.verified && 
-            u.directions.length > 0 && 
-            (u.directions.includes(`${order.from}-${order.to}`) || 
-             u.directions.includes(`${order.to}-${order.from}`))
-        );
+                data.orders.push(order);
+                saveData(data);
 
-        for (const driver of drivers) {
-            try {
-                const msg = await bot.telegram.sendMessage(driver.id, 
-                    driverMessage,
-                    Markup.inlineKeyboard([
-                        [Markup.button.callback('✅ Қабул қилиш', `accept_${order.id}`)],
-                        [Markup.button.callback('❌ Ўтказиб юбориш', `ignore_${order.id}`)]
-                    ])
+                await ctx.editMessageText('Буюртмангиз қабул қилинди! Тез орада шафёрларимиз сизга алоқага чиқишади\n\nЯна буюртма бериш учун /start тугмасини босинг');
+                await ctx.reply('Ассалому алайкум\n\nҚуйидаги тугмалардан бирини танланг!', passengerMenu);
+
+                let driverMessage = `🆕 Янги буюртма! (${order.type})\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}`;
+                if (order.username) {
+                    driverMessage += `\n-Username: ${order.username}`;
+                }
+                driverMessage += `\n📍 Йўналиш: ${order.from} ➡️ ${order.to}`;
+                if (order.packageType) {
+                    driverMessage += `\n📦 Нимa: ${order.packageType}`;
+                }
+                driverMessage += `\nℹ️ Маълумот: ${order.details}`;
+
+                const drivers = Object.values(data.users).filter(u => 
+                    u.role === 'driver' && 
+                    u.verified && 
+                    u.directions.length > 0 && 
+                    (u.directions.includes(`${order.from}-${order.to}`) || 
+                     u.directions.includes(`${order.to}-${order.from}`)
+                    )
                 );
-                order.driverMessages.push({ chatId: driver.id, messageId: msg.message_id });
-            } catch (err) {
-                console.error(`Could not send message to driver ${driver.id}:`, err.message);
+
+                for (const driver of drivers) {
+                    try {
+                        const msg = await bot.telegram.sendMessage(driver.id, 
+                            driverMessage,
+                            Markup.inlineKeyboard([
+                                [Markup.button.callback('✅ Қабул қилиш', `accept_${order.id}`)],
+                                [Markup.button.callback('❌ Ўтказиб юбориш', `ignore_${order.id}`)]
+                            ])
+                        );
+                        order.driverMessages.push({ chatId: driver.id, messageId: msg.message_id });
+                    } catch (err) {
+                        console.error(`Could not send message to driver ${driver.id}:`, err.message);
+                    }
+                }
+                saveData(data);
+                return ctx.scene.leave();
             }
         }
-        saveData(data);
-        return ctx.scene.leave();
+        return next();
     }
 );
 
@@ -466,8 +769,70 @@ const directionScene = new Scenes.WizardScene(
         if (!ctx.message || !ctx.message.text) return next();
         const text = ctx.message.text;
         if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
             if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
             return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '📋 Менинг буюртмаларим') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (!user) return;
+
+            if (user.role === 'driver') {
+                const myOrders = data.orders.filter(o => o.driverId === ctx.from.id && o.status === 'accepted');
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', driverMenu);
+                
+                myOrders.forEach(order => {
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                        Markup.inlineKeyboard([
+                            [
+                                Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                                Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                            ]
+                        ])
+                    );
+                });
+            } else {
+                const myOrders = data.orders.filter(o => o.userId === ctx.from.id && (o.status === 'pending' || o.status === 'accepted'));
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', passengerMenu);
+
+                myOrders.forEach(order => {
+                    const statusText = order.status === 'pending' ? '⏳ Кутилмоқда' : `✅ Қабул қилинди (Хайдовчи: ${order.driverName})`;
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n📊 Ҳолат: ${statusText}`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('❌ Буюртмани бекор қилиш', `passenger_cancel_${order.id}`)]
+                        ])
+                    );
+                });
+            }
+            return;
+        }
+        if (text === '📊 Статистика') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (user && user.role === 'driver') {
+                return ctx.reply(`📊 Сизнинг статистикангиз:\n\n✅ Қабул қилинган буюртмалар: ${user.stats.completed}`, driverMenu);
+            }
+            return;
+        }
+        if (text === '⚙️ Машина маълумотларини созлаш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('CAR_SETTINGS_SCENE');
+        }
+        if (text === '🔄 Ролни ўзгартириш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '🤖 Бот ҳақида') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.reply(
+                `🤖 Бот ҳақида:\n\nТезкор Taxi - тез ва қулай такси хизмати!\n\nБизнинг хизматларимиз:\n- 🚕 Йўловчи хизмати\n- 📦 Почта хизмати\n\n📞 Қўллаб-quvvatlash: ${settings.support_phone || 'Кўрсатилмаган'}`,
+                driverMenu
+            );
         }
         if (text === '✅ Сақлаш') {
             await ctx.reply('Йўналишлар сақланди!', driverMenu);
@@ -496,8 +861,70 @@ const directionScene = new Scenes.WizardScene(
         if (!ctx.message || !ctx.message.text) return next();
         const text = ctx.message.text;
         if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
             if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
             return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '📋 Менинг буюртмаларим') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (!user) return;
+
+            if (user.role === 'driver') {
+                const myOrders = data.orders.filter(o => o.driverId === ctx.from.id && o.status === 'accepted');
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', driverMenu);
+                
+                myOrders.forEach(order => {
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                        Markup.inlineKeyboard([
+                            [
+                                Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                                Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                            ]
+                        ])
+                    );
+                });
+            } else {
+                const myOrders = data.orders.filter(o => o.userId === ctx.from.id && (o.status === 'pending' || o.status === 'accepted'));
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', passengerMenu);
+
+                myOrders.forEach(order => {
+                    const statusText = order.status === 'pending' ? '⏳ Кутилмоқда' : `✅ Қабул қилинди (Хайдовчи: ${order.driverName})`;
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n📊 Ҳолат: ${statusText}`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('❌ Буюртмани бекор қилиш', `passenger_cancel_${order.id}`)]
+                        ])
+                    );
+                });
+            }
+            return;
+        }
+        if (text === '📊 Статистика') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (user && user.role === 'driver') {
+                return ctx.reply(`📊 Сизнинг статистикангиз:\n\n✅ Қабул қилинган буюртмалар: ${user.stats.completed}`, driverMenu);
+            }
+            return;
+        }
+        if (text === '⚙️ Машина маълумотларини созлаш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('CAR_SETTINGS_SCENE');
+        }
+        if (text === '🔄 Ролни ўзгартириш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '🤖 Бот ҳақида') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.reply(
+                `🤖 Бот ҳақида:\n\nТезкор Taxi - тез ва қулай такси хизмати!\n\nБизнинг хизматларимиз:\n- 🚕 Йўловчи хизмати\n- 📦 Почта хизмати\n\n📞 Қўллаб-quvvatlash: ${settings.support_phone || 'Кўрсатилмаган'}`,
+                driverMenu
+            );
         }
         if (regions.includes(text)) {
             const dir = `${ctx.wizard.state.from}-${text}`;
@@ -511,6 +938,206 @@ const directionScene = new Scenes.WizardScene(
             }
             return ctx.scene.reenter();
         }
+    }
+);
+
+const carSettingsScene = new Scenes.WizardScene(
+    'CAR_SETTINGS_SCENE',
+    async (ctx) => {
+        const data = getData();
+        const user = data.users[ctx.from.id];
+        
+        let text = '⚙️ Машина маълумотларини созлаш:\n\n';
+        text += `📋 Хозирги маълумотлар:\n`;
+        text += `🚗 Модели: ${user.carModel || 'Кiritilmagan'}\n`;
+        text += `🏁 Давлат рақами: ${user.stateNumber || 'Кiritilmagan'}\n\n`;
+        text += 'Илтимос, машинанинг моделини киритинг:\nМасалан: Nexia 3';
+        
+        const keyboard = [['🏠 Бош саҳифа']];
+        if (user.carModel) {
+            keyboard[0].unshift('▶️ Қолдириб қўйиш');
+        }
+        
+        await ctx.reply(text, Markup.keyboard(keyboard).resize());
+        return ctx.wizard.next();
+    },
+    async (ctx, next) => {
+        if (!ctx.message || !ctx.message.text) return next();
+        const text = ctx.message.text;
+        if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
+            return ctx.scene.leave();
+        }
+        if (text === '📋 Менинг буюртмаларим') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (!user) return;
+
+            if (user.role === 'driver') {
+                const myOrders = data.orders.filter(o => o.driverId === ctx.from.id && o.status === 'accepted');
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', driverMenu);
+                
+                myOrders.forEach(order => {
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                        Markup.inlineKeyboard([
+                            [
+                                Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                                Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                            ]
+                        ])
+                    );
+                });
+            } else {
+                const myOrders = data.orders.filter(o => o.userId === ctx.from.id && (o.status === 'pending' || o.status === 'accepted'));
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', passengerMenu);
+
+                myOrders.forEach(order => {
+                    const statusText = order.status === 'pending' ? '⏳ Кутилмоқда' : `✅ Қабул қилинди (Хайдовчи: ${order.driverName})`;
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n📊 Ҳолат: ${statusText}`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('❌ Буюртмани бекор қилиш', `passenger_cancel_${order.id}`)]
+                        ])
+                    );
+                });
+            }
+            return;
+        }
+        if (text === '📊 Статистика') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (user && user.role === 'driver') {
+                return ctx.reply(`📊 Сизнинг статистикангиз:\n\n✅ Қабул қилинган буюртмалар: ${user.stats.completed}`, driverMenu);
+            }
+            return;
+        }
+        if (text === '📍 Йўналишларни созлаш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('DIRECTION_SCENE');
+        }
+        if (text === '🔄 Ролни ўзгартириш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '🤖 Бот ҳақида') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.reply(
+                `🤖 Бот ҳақида:\n\nТезкор Taxi - тез ва қулай такси хизмати!\n\nБизнинг хизматларимиз:\n- 🚕 Йўловчи хизмати\n- 📦 Почта хизмати\n\n📞 Қўллаб-quvvatlash: ${settings.support_phone || 'Кўрсатилмаган'}`,
+                driverMenu
+            );
+        }
+        
+        const data = getData();
+        const user = data.users[ctx.from.id];
+        
+        if (text === '▶️ Қолдириб қўйиш') {
+            ctx.wizard.state.carModel = user.carModel;
+        } else {
+            ctx.wizard.state.carModel = text;
+        }
+        
+        let msgText = 'Илтимос, машинанинг давлат рақамини киритинг:\nМасалан: 10 M 111 MM';
+        if (user.stateNumber) {
+            msgText += `\n📋 Хозирги рақам: ${user.stateNumber}`;
+        }
+        
+        const keyboard = [['🏠 Бош саҳифа']];
+        if (user.stateNumber) {
+            keyboard[0].unshift('▶️ Қолдириб қўйиш');
+        }
+        
+        await ctx.reply(msgText, Markup.keyboard(keyboard).resize());
+        return ctx.wizard.next();
+    },
+    async (ctx, next) => {
+        if (!ctx.message || !ctx.message.text) return next();
+        const text = ctx.message.text;
+        if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
+            return ctx.scene.leave();
+        }
+        if (text === '📋 Менинг буюртмаларим') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (!user) return;
+
+            if (user.role === 'driver') {
+                const myOrders = data.orders.filter(o => o.driverId === ctx.from.id && o.status === 'accepted');
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', driverMenu);
+                
+                myOrders.forEach(order => {
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                        Markup.inlineKeyboard([
+                            [
+                                Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                                Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                            ]
+                        ])
+                    );
+                });
+            } else {
+                const myOrders = data.orders.filter(o => o.userId === ctx.from.id && (o.status === 'pending' || o.status === 'accepted'));
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', passengerMenu);
+
+                myOrders.forEach(order => {
+                    const statusText = order.status === 'pending' ? '⏳ Кутилмоқда' : `✅ Қабул қилинди (Хайдовчи: ${order.driverName})`;
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n📊 Ҳолат: ${statusText}`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('❌ Буюртмани бекор қилиш', `passenger_cancel_${order.id}`)]
+                        ])
+                    );
+                });
+            }
+            return;
+        }
+        if (text === '📊 Статистика') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (user && user.role === 'driver') {
+                return ctx.reply(`📊 Сизнинг статистикангиз:\n\n✅ Қабул қилинган буюртмалар: ${user.stats.completed}`, driverMenu);
+            }
+            return;
+        }
+        if (text === '📍 Йўналишларни созлаш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('DIRECTION_SCENE');
+        }
+        if (text === '🔄 Ролни ўзгартириш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '🤖 Бот ҳақида') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.reply(
+                `🤖 Бот ҳақида:\n\nТезкор Taxi - тез ва қулай такси хизмати!\n\nБизнинг хизматларимиз:\n- 🚕 Йўловчи хизмати\n- 📦 Почта хизмати\n\n📞 Қўллаб-quvvatlash: ${settings.support_phone || 'Кўрсатилмаган'}`,
+                driverMenu
+            );
+        }
+        
+        const data = getData();
+        const user = data.users[ctx.from.id];
+        
+        if (text === '▶️ Қолдириб қўйиш') {
+            ctx.wizard.state.stateNumber = user.stateNumber;
+        } else {
+            ctx.wizard.state.stateNumber = text;
+        }
+        
+        user.carModel = ctx.wizard.state.carModel;
+        user.stateNumber = ctx.wizard.state.stateNumber;
+        saveData(data);
+        
+        await ctx.reply('✅ Машина маълумотлари сақланди!', driverMenu);
+        return ctx.scene.leave();
     }
 );
 
@@ -640,7 +1267,7 @@ const adminSettingsScene = new Scenes.WizardScene(
     }
 );
 
-const stage = new Scenes.Stage([registrationScene, passengerScene, directionScene, broadcastScene, supportReplyScene, supportScene, adminSettingsScene]);
+const stage = new Scenes.Stage([registrationScene, passengerScene, directionScene, carSettingsScene, broadcastScene, supportReplyScene, supportScene, adminSettingsScene]);
 
 // Global handlers for all scenes to allow breaking out
 stage.start(async (ctx) => {
@@ -695,7 +1322,13 @@ async function startBot(ctx) {
                     driverMenu
                 );
             }
-            return ctx.reply(`Ассалому алайкум Хайдовчи ${user.name}!\n\nКеракли бўлимни танланг:`, driverMenu);
+            if (!user.carModel || !user.stateNumber) {
+                return ctx.reply(
+                    `Ассалому алайкум Ҳайдовчи ${user.name}!\n\n⚠️ Сиз ҳали машина маълумотларини киртамагансиз. Машина маълумотларини киртамасангиз сизга буюртмалар келмайди.\n\nИлтимос, "⚙️ Машина маълумотларини созлаш" тугмаси орқали маълумотларни киритинг.`,
+                    driverMenu
+                );
+            }
+            return ctx.reply(`Ассалому алайкум Ҳайдовчи ${user.name}!\n\nКеракли бўлимни танланг:`, driverMenu);
         }
     }
     
@@ -840,6 +1473,13 @@ bot.action(/complete_order_(.+)/, async (ctx) => {
     const driver = data.users[ctx.from.id];
     if (driver) {
         driver.stats.completed++;
+        driver.stats.driverCompleted++;
+    }
+    
+    // Increment user stats on completion
+    const user = data.users[order.userId];
+    if (user) {
+        user.stats.completed++;
     }
     
     saveData(data);
@@ -869,6 +1509,8 @@ bot.hears('📊 Статистика', (ctx) => {
 });
 
 bot.hears('📍 Йўналишларни созлаш', (ctx) => ctx.scene.enter('DIRECTION_SCENE'));
+
+bot.hears('⚙️ Машина маълумотларини созлаш', (ctx) => ctx.scene.enter('CAR_SETTINGS_SCENE'));
 
 bot.hears('🔄 Ролни ўзгартириш', (ctx) => {
     return ctx.scene.enter('REGISTRATION_SCENE');
@@ -909,6 +1551,10 @@ bot.hears('🤖 Бот ҳақида', async (ctx) => {
     await ctx.reply(`🤖 Tezkor Taxi Bot\n\nBizning rasmiy kanalimizga a'zo bo'ling!`, Markup.inlineKeyboard([
         [Markup.button.url('📢 Расмий канал', data.settings.about_channel_url)]
     ]));
+});
+
+bot.hears('🆘 Ёрдам', (ctx) => {
+    return ctx.scene.enter('SUPPORT_SCENE');
 });
 
 bot.hears('⚙️ Созламалар', (ctx) => {
@@ -977,6 +1623,13 @@ bot.action(/cancel_order_(.+)/, async (ctx) => {
     const driver = data.users[ctx.from.id];
     if (driver) {
         driver.stats.completed = Math.max(0, driver.stats.completed - 1);
+        driver.stats.driverRejected++;
+    }
+
+    // Increment user stats on cancel
+    const user = data.users[order.userId];
+    if (user) {
+        user.stats.rejected++;
     }
 
     // Reset order status
@@ -1039,11 +1692,12 @@ bot.hears('📈 Умумий статистика', (ctx) => {
     const passengers = users.filter(u => u.role === 'passenger');
     const orders = data.orders;
     
-    let text = `📈 Умумий статистика:\n\n👤 Йўловчилар: ${passengers.length}\n🚖 Хайдовчилар: ${drivers.length} (Тасдиқланган: ${drivers.filter(d => d.verified).length})\n📦 Умумий буюртмаlar: ${orders.length}`;
+    let text = `📈 Умумий статистика:\n\n👤 Йўловчилар: ${passengers.length}\n🚖 Хайдовчилар: ${drivers.length} (Тасдиқланган: ${drivers.filter(d => d.verified).length})\n📦 Умумий буюртmalar: ${orders.length}`;
     
     ctx.reply(text, Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Тасдиқланган хайдовчилар', 'manage_drivers_verified_0')],
-        [Markup.button.callback('⏳ Кутаётган аризалар', 'manage_drivers_unverified_0')]
+        [Markup.button.callback('👤 Йўловчилар', 'list_passengers_0')],
+        [Markup.button.callback('🚖 Хайдовчилар', 'list_drivers_menu')],
+        [Markup.button.callback('📋 Барча фойдаланувчилар', 'list_all_users_0')]
     ]));
 });
 
@@ -1089,12 +1743,331 @@ bot.action('admin_home_stats', async (ctx) => {
     const passengers = users.filter(u => u.role === 'passenger');
     const orders = data.orders;
     
-    let text = `📈 Умумий статистика:\n\n👤 Йўловчилар: ${passengers.length}\n🚖 Хайдовчилар: ${drivers.length} (Тасдиқланган: ${drivers.filter(d => d.verified).length})\n📦 Умумий буюртмаlar: ${orders.length}`;
+    let text = `📈 Умумий статистика:\n\n👤 Йўловчилар: ${passengers.length}\n🚖 Хайдовчилар: ${drivers.length} (Тасдиқланган: ${drivers.filter(d => d.verified).length})\n📦 Умумий буюртmalar: ${orders.length}`;
     
     await ctx.editMessageText(text, Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Тасдиқланган хайдовчилар', 'manage_drivers_verified_0')],
-        [Markup.button.callback('⏳ Кутаётган аризалар', 'manage_drivers_unverified_0')]
+        [Markup.button.callback('👤 Йўловчилар', 'list_passengers_0')],
+        [Markup.button.callback('🚖 Ҳайдовчилар', 'list_drivers_menu')],
+        [Markup.button.callback('📋 Барча фойдаланувчилар', 'list_all_users_0')]
     ]));
+});
+
+bot.hears(/\/info_(.+)/, async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const userId = parseInt(ctx.match[1]);
+    const data = getData();
+    const user = data.users[userId];
+    
+    if (!user) {
+        return ctx.reply('Фойдаланувчи топилмади!');
+    }
+    
+    const stats = getUserStats(userId, data.orders);
+    const roleText = user.role === 'passenger' ? '👤 Йўловчи' : '🚖 Ҳайдовчи';
+    const verifiedText = user.role === 'driver' ? (user.verified ? '✅ Тасдиқланган' : '⏳ Тасдиқланмаган') : '';
+    
+    let text = `📊 Фойдаланувчи ҳақида:\n\n`;
+    text += `${roleText} ${verifiedText}\n`;
+    text += `👤 Исм: ${user.name}\n`;
+    text += `📞 Тел: ${user.phone}\n`;
+    if (user.username) text += `💬 Username: ${user.username}\n`;
+    text += `🆔 ID: ${user.id}\n`;
+    text += `📅 Рўйхатдан ўтган: ${formatDate(user.createdAt)}\n\n`;
+    
+    text += `📦 Буюртмалар:\n`;
+    text += `   📋 Жами: ${stats.totalOrders}\n`;
+    text += `   ✅ Қабул қилинган: ${stats.acceptedOrders}\n`;
+    text += `   ✅ Якунланган: ${stats.completedOrders}\n`;
+    text += `   ❌ Бекор қилинган: ${stats.cancelledOrders}\n`;
+    
+    if (user.role === 'driver') {
+        text += `\n🚖 Ҳайдовчи сифатида:\n`;
+        text += `   ✅ Қабул қилинган: ${stats.driverAccepted}\n`;
+        text += `   ❌ Бекор қилинган: ${stats.driverRejected}\n`;
+        text += `   ✅ Якунланган: ${stats.driverCompleted}\n`;
+    }
+    
+    const buttons = [];
+    
+    if (user.role === 'driver') {
+        if (user.verified) {
+            buttons.push([Markup.button.callback('❌ Блоклаш', `toggle_verify_${userId}`)]);
+        } else {
+            buttons.push([Markup.button.callback('✅ Тасдиқлаш', `toggle_verify_${userId}`)]);
+        }
+    }
+    
+    const backButton = user.role === 'driver' 
+        ? (user.verified ? 'list_drivers_verified_0' : 'list_drivers_unverified_0')
+        : 'list_passengers_0';
+    
+    buttons.push([Markup.button.callback('🏠 Бош саҳифа', 'admin_home_stats')]);
+    
+    await ctx.reply(text, Markup.inlineKeyboard(buttons));
+});
+
+function formatDate(isoString) {
+    if (!isoString) return 'Noma\'lum';
+    const date = new Date(isoString);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+function getUserStats(userId, orders) {
+    const userOrders = orders.filter(o => o.userId === userId);
+    const driverOrders = orders.filter(o => o.driverId === userId);
+    
+    const acceptedOrders = userOrders.filter(o => o.status === 'accepted').length;
+    const completedOrders = userOrders.filter(o => o.status === 'completed').length;
+    const cancelledOrders = userOrders.filter(o => o.status === 'cancelled').length;
+    
+    const driverAccepted = driverOrders.filter(o => o.status === 'accepted' || o.status === 'completed').length;
+    const driverCompleted = driverOrders.filter(o => o.status === 'completed').length;
+    const driverRejected = 0;
+    
+    return {
+        totalOrders: userOrders.length,
+        acceptedOrders,
+        completedOrders,
+        cancelledOrders,
+        driverAccepted,
+        driverCompleted,
+        driverRejected
+    };
+}
+
+bot.action('list_drivers_menu', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    await ctx.answerCbQuery();
+    await ctx.editMessageText('🚖 Ҳайдовчилар:', Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Тасдиқланган', 'list_drivers_verified_0')],
+        [Markup.button.callback('⏳ Тасдиқланмаган', 'list_drivers_unverified_0')],
+        [Markup.button.callback('⬅️ Орқага', 'admin_home_stats')]
+    ]));
+});
+
+async function showUserList(ctx, filterType, page) {
+    if (ctx.from.id !== ADMIN_ID) return;
+    
+    const data = getData();
+    let users = Object.values(data.users);
+    
+    if (filterType === 'passengers') {
+        users = users.filter(u => u.role === 'passenger');
+    } else if (filterType === 'drivers_verified') {
+        users = users.filter(u => u.role === 'driver' && u.verified);
+    } else if (filterType === 'drivers_unverified') {
+        users = users.filter(u => u.role === 'driver' && !u.verified);
+    }
+    
+    const pageSize = 7;
+    const start = page * pageSize;
+    const end = start + pageSize;
+    const paginatedUsers = users.slice(start, end);
+    
+    let title = '';
+    if (filterType === 'passengers') title = '👤 Йўловчилар';
+    else if (filterType === 'drivers_verified') title = '✅ Тасдиқланган ҳайдовчилар';
+    else if (filterType === 'drivers_unverified') title = '⏳ Тасдиқланмаган ҳайдовчилар';
+    else title = '📋 Барча фойдаланувчилар';
+    
+    let text = `${title} (Жами: ${users.length}, Саҳифа: ${page + 1}):\n\n`;
+    
+    if (paginatedUsers.length === 0) {
+        text += 'Фойдаланувчилар йўқ.';
+    } else {
+        for (const user of paginatedUsers) {
+            const roleText = user.role === 'driver' ? '🚖 Ҳайдовчи' : '👤 Йўловчи';
+            const statusIcon = user.role === 'driver' ? (user.verified ? '✅' : '⏳') : '👤';
+            const username = user.username ? `@${user.username}` : '';
+            text += `${statusIcon} ${user.name} ${username}\n`;
+            text += `${roleText}\n`;
+            text += `🆔 ${user.id} | /info_${user.id}\n`;
+            text += `📅 ${formatDate(user.createdAt)}\n\n`;
+        }
+    }
+    
+    const buttons = [];
+    
+    const navButtons = [];
+    const callbackPrefix = filterType === 'all' ? 'list_all_users' : `list_${filterType}`;
+    
+    if (page > 0) {
+        navButtons.push(Markup.button.callback('⬅️ Орқага', `${callbackPrefix}_${page - 1}`));
+    }
+    
+    const totalPages = Math.ceil(users.length / pageSize);
+    if (page + 1 < totalPages) {
+        navButtons.push(Markup.button.callback('Олдинга ➡️', `${callbackPrefix}_${page + 1}`));
+    }
+    
+    if (navButtons.length > 0) buttons.push(navButtons);
+    
+    buttons.push([Markup.button.callback('🏠 Бош саҳифа', 'admin_home_stats')]);
+
+    try {
+        await ctx.editMessageText(text, Markup.inlineKeyboard(buttons));
+    } catch (e) {
+        console.error('Error in showUserList:', e);
+        try {
+            await ctx.editMessageText(text, Markup.inlineKeyboard(buttons));
+        } catch (e2) {
+            console.error('Second edit also failed:', e2);
+        }
+    }
+}
+
+bot.action(/list_passengers_(\d+)/, async (ctx) => {
+    const page = parseInt(ctx.match[1]);
+    await ctx.answerCbQuery();
+    await showUserList(ctx, 'passengers', page);
+});
+
+bot.action(/list_drivers_verified_(\d+)/, async (ctx) => {
+    const page = parseInt(ctx.match[1]);
+    await ctx.answerCbQuery();
+    await showUserList(ctx, 'drivers_verified', page);
+});
+
+bot.action(/list_drivers_unverified_(\d+)/, async (ctx) => {
+    const page = parseInt(ctx.match[1]);
+    await ctx.answerCbQuery();
+    await showUserList(ctx, 'drivers_unverified', page);
+});
+
+bot.action(/list_all_users_(\d+)/, async (ctx) => {
+    const page = parseInt(ctx.match[1]);
+    await ctx.answerCbQuery();
+    await showUserList(ctx, 'all', page);
+});
+
+bot.action(/info_(.+)/, async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const userId = parseInt(ctx.match[1]);
+    const data = getData();
+    const user = data.users[userId];
+    
+    if (!user) {
+        await ctx.answerCbQuery('Фойдаланувчи топилмади!');
+        return;
+    }
+    
+    await ctx.answerCbQuery();
+    
+    const stats = getUserStats(userId, data.orders);
+    const roleText = user.role === 'passenger' ? '👤 Йўловчи' : '🚖 Ҳайдовчи';
+    const verifiedText = user.role === 'driver' ? (user.verified ? '✅ Тасдиқланган' : '⏳ Тасдиқланмаган') : '';
+    
+    let text = `📊 Фойдаланувчи ҳақида:\n\n`;
+    text += `${roleText} ${verifiedText}\n`;
+    text += `👤 Исм: ${user.name}\n`;
+    text += `📞 Тел: ${user.phone}\n`;
+    if (user.username) text += `💬 Username: ${user.username}\n`;
+    text += `🆔 ID: ${user.id}\n`;
+    text += `📅 Рўйхатдан ўтган: ${formatDate(user.createdAt)}\n\n`;
+    
+    text += `📦 Буюртмалар:\n`;
+    text += `   📋 Жами: ${stats.totalOrders}\n`;
+    text += `   ✅ Қабул қилинган: ${stats.acceptedOrders}\n`;
+    text += `   ✅ Якунланган: ${stats.completedOrders}\n`;
+    text += `   ❌ Бекор қилинган: ${stats.cancelledOrders}\n`;
+    
+    if (user.role === 'driver') {
+        text += `\n🚖 Ҳайдовчи :\n`;
+        text += `   ✅ Қабул қилинган: ${stats.driverAccepted}\n`;
+        text += `   ❌ Бекор қилинган: ${stats.driverRejected}\n`;
+        text += `   ✅ Якунланган: ${stats.driverCompleted}\n`;
+    }
+    
+    const backButton = user.role === 'driver' 
+        ? (user.verified ? 'list_drivers_verified_0' : 'list_drivers_unverified_0')
+        : 'list_passengers_0';
+    
+    const buttons = [];
+    
+    if (user.role === 'driver') {
+        if (user.verified) {
+            buttons.push([Markup.button.callback('❌ Блоклаш', `toggle_verify_${userId}`)]);
+        } else {
+            buttons.push([Markup.button.callback('✅ Тасдиқлаш', `toggle_verify_${userId}`)]);
+        }
+    }
+    
+    buttons.push([Markup.button.callback('⬅️ Орқага', backButton)]);
+    buttons.push([Markup.button.callback('🏠 Бош саҳифа', 'admin_home_stats')]);
+    
+    await ctx.editMessageText(text, Markup.inlineKeyboard(buttons));
+});
+
+bot.action(/toggle_verify_(.+)/, async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const userId = parseInt(ctx.match[1]);
+    const data = getData();
+    const user = data.users[userId];
+    
+    if (!user) {
+        await ctx.answerCbQuery('Фойдаланувчи топилмади!');
+        return;
+    }
+    
+    user.verified = !user.verified;
+    saveData(data);
+    
+    await ctx.answerCbQuery(`Хайдовчи ${user.verified ? 'тасдиқланди' : 'блокланди'}!`);
+    
+    if (!user.verified) {
+        bot.telegram.sendMessage(userId, '❌ Сизнинг хайдовчилик рухсатингиз admin томонидан олиб қўйилди.', Markup.removeKeyboard()).catch(e => {});
+    } else {
+        bot.telegram.sendMessage(userId, '✅ Сизнинг хайдовчилик рухсатингиз қайта тикланди!', driverMenu).catch(e => {});
+    }
+    
+    const stats = getUserStats(userId, data.orders);
+    const roleText = user.role === 'passenger' ? '👤 Йўловчи' : '🚖 Ҳайдовчи';
+    const verifiedText = user.role === 'driver' ? (user.verified ? '✅ Тасдиқланган' : '⏳ Тасдиқланмаган') : '';
+    
+    let text = `📊 Фойдаланувчи ҳақида:\n\n`;
+    text += `${roleText} ${verifiedText}\n`;
+    text += `👤 Исм: ${user.name}\n`;
+    text += `📞 Тел: ${user.phone}\n`;
+    if (user.username) text += `💬 Username: ${user.username}\n`;
+    text += `🆔 ID: ${user.id}\n`;
+    text += `📅 Рўйхатдан ўтган: ${formatDate(user.createdAt)}\n\n`;
+    
+    text += `📦 Буюртмалар:\n`;
+    text += `   📋 Жами: ${stats.totalOrders}\n`;
+    text += `   ✅ Қабул қилинган: ${stats.acceptedOrders}\n`;
+    text += `   ✅ Якунланган: ${stats.completedOrders}\n`;
+    text += `   ❌ Бекор қилинган: ${stats.cancelledOrders}\n`;
+    
+    if (user.role === 'driver') {
+        text += `\n🚖 Ҳайдовчи сифатида:\n`;
+        text += `   ✅ Қабул қилинган: ${stats.driverAccepted}\n`;
+        text += `   ❌ Атказ қилинган: ${stats.driverRejected}\n`;
+        text += `   ✅ Якунланган: ${stats.driverCompleted}\n`;
+    }
+    
+    const backButton = user.role === 'driver' 
+        ? (user.verified ? 'list_drivers_verified_0' : 'list_drivers_unverified_0')
+        : 'list_passengers_0';
+    
+    const buttons = [];
+    
+    if (user.role === 'driver') {
+        if (user.verified) {
+            buttons.push([Markup.button.callback('❌ Блоклаш', `toggle_verify_${userId}`)]);
+        } else {
+            buttons.push([Markup.button.callback('✅ Тасдиқлаш', `toggle_verify_${userId}`)]);
+        }
+    }
+    
+    buttons.push([Markup.button.callback('⬅️ Орқага', backButton)]);
+    buttons.push([Markup.button.callback('🏠 Бош саҳифа', 'admin_home_stats')]);
+    
+    await ctx.editMessageText(text, Markup.inlineKeyboard(buttons));
 });
 
 bot.action(/manage_driver_(.+?)_(verified|unverified)_(\d+)/, async (ctx) => {
@@ -1110,7 +2083,6 @@ bot.action(/manage_driver_(.+?)_(verified|unverified)_(\d+)/, async (ctx) => {
         saveData(data);
         await ctx.answerCbQuery(`Хайдовчи ${user.verified ? 'тасдиқланди' : 'тасдиғи олиб қўйилди'}`);
         
-        // Refresh the list
         const allDrivers = Object.values(data.users).filter(u => u.role === 'driver');
         const drivers = type === 'verified' ? allDrivers.filter(d => d.verified) : allDrivers.filter(d => !d.verified);
         
@@ -1185,7 +2157,15 @@ bot.action(/accept_(.+)/, async (ctx) => {
     order.driverName = driver.name; // Use driver.name instead of ctx.from.first_name for consistency
     order.driverPhone = driver.phone;
     
-    // driver.stats.completed++; // Don't increment here, increment in complete_order
+    // Increment stats
+    if (driver.stats) {
+        driver.stats.accepted++;
+    }
+    const user = data.users[order.userId];
+    if (user && user.stats) {
+        user.stats.accepted++;
+    }
+    
     saveData(data);
 
     await ctx.answerCbQuery('Сиз буюртмани қабул қилдингиз!');
@@ -1201,12 +2181,37 @@ bot.action(/accept_(.+)/, async (ctx) => {
     updatedMessage += `\nℹ️ Маълумот: ${order.details}\n\n⚠️ БУЮРТМА ОЛИНДИ! (Хайдовчи: ${order.driverName})`;
 
     for (const msgInfo of order.driverMessages) {
-        try {
-            await bot.telegram.editMessageText(msgInfo.chatId, msgInfo.messageId, null, updatedMessage);
-        } catch (err) {}
+        if (msgInfo.chatId === ctx.from.id) {
+            try {
+                await bot.telegram.editMessageText(
+                    msgInfo.chatId,
+                    msgInfo.messageId,
+                    null,
+                    updatedMessage,
+                    Markup.inlineKeyboard([
+                        [
+                            Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                            Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                        ]
+                        ])
+                    );
+            } catch (err) {}
+        } else {
+            try {
+                await bot.telegram.editMessageText(msgInfo.chatId, msgInfo.messageId, null, updatedMessage);
+            } catch (err) {}
+        }
     }
 
-    bot.telegram.sendMessage(order.userId, `✅ Сизнинг буюртмангизни хайдовчи қабул қилди!\n\n👨‍✈️ Хайдовчи: ${order.driverName}\n📞 Тел: ${order.driverPhone}`).catch(e => console.error(`Error sending message to user ${order.userId}:`, e.message));
+    let userMessage = `✅ Сизнинг буюртмангизни хайдовчи қабул қилди!\n\n👨‍✈️ Хайдовчи: ${order.driverName}\n📞 Тел: ${order.driverPhone}`;
+    if (driver.carModel) {
+        userMessage += `\n🚗 Машина модели: ${driver.carModel}`;
+    }
+    if (driver.stateNumber) {
+        userMessage += `\n🏁 Давлат рақами: ${driver.stateNumber}`;
+    }
+    
+    bot.telegram.sendMessage(order.userId, userMessage).catch(e => console.error(`Error sending message to user ${order.userId}:`, e.message));
 });
 
 bot.action(/ignore_(.+)/, async (ctx) => {
