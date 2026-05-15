@@ -113,6 +113,10 @@ async function initDB() {
                     user.stateNumber = '';
                     needsSave = true;
                 }
+                if (user.role === 'driver' && user.carPhoto === undefined) {
+                    user.carPhoto = null;
+                    needsSave = true;
+                }
             }
         }
         if (needsSave) {
@@ -255,7 +259,8 @@ const registrationScene = new Scenes.WizardScene(
                 stats: { completed: 0 },
                 createdAt: new Date().toISOString(),
                 carModel: '',
-                stateNumber: ''
+                stateNumber: '',
+                carPhoto: null
             };
             saveData(data);
 
@@ -962,7 +967,7 @@ const carSettingsScene = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
     async (ctx, next) => {
-        if (!ctx.message || !ctx.message.text) return next();
+        if (!ctx.message) return next();
         const text = ctx.message.text;
         if (text === '🏠 Бош саҳифа') {
             try { await ctx.scene.leave(); } catch (e) {}
@@ -1036,7 +1041,7 @@ const carSettingsScene = new Scenes.WizardScene(
         
         if (text === '▶️ Қолдириб қўйиш') {
             ctx.wizard.state.carModel = user.carModel;
-        } else {
+        } else if (text) {
             ctx.wizard.state.carModel = text;
         }
         
@@ -1054,7 +1059,7 @@ const carSettingsScene = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
     async (ctx, next) => {
-        if (!ctx.message || !ctx.message.text) return next();
+        if (!ctx.message) return next();
         const text = ctx.message.text;
         if (text === '🏠 Бош саҳифа') {
             try { await ctx.scene.leave(); } catch (e) {}
@@ -1128,12 +1133,107 @@ const carSettingsScene = new Scenes.WizardScene(
         
         if (text === '▶️ Қолдириб қўйиш') {
             ctx.wizard.state.stateNumber = user.stateNumber;
-        } else {
+        } else if (text) {
             ctx.wizard.state.stateNumber = text;
+        }
+        
+        let photoText = 'Илтимос, машина расмини юборинг:\nМасалан: машинанинг фотографияси';
+        if (user.carPhoto) {
+            photoText += '\n📋 Хозирги расум: бор';
+        }
+        
+        const keyboard = [['🏠 Бош саҳифа']];
+        if (user.carPhoto) {
+            keyboard[0].unshift('▶️ Қолдириб қўйиш');
+        }
+        
+        await ctx.reply(photoText, Markup.keyboard(keyboard).resize());
+        return ctx.wizard.next();
+    },
+    async (ctx, next) => {
+        if (!ctx.message) return next();
+        const text = ctx.message.text;
+        if (text === '🏠 Бош саҳифа') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            if (ctx.from.id === ADMIN_ID) return ctx.reply('Админ менюси:', adminMenu);
+            return ctx.scene.leave();
+        }
+        if (text === '📋 Менинг буюртмаларим') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (!user) return;
+
+            if (user.role === 'driver') {
+                const myOrders = data.orders.filter(o => o.driverId === ctx.from.id && o.status === 'accepted');
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', driverMenu);
+                
+                myOrders.forEach(order => {
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n👤 Йўловчи: ${order.userName}\n📞 Тел: ${order.userPhone}\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}`,
+                        Markup.inlineKeyboard([
+                            [
+                                Markup.button.callback('✅ Якунлаш', `complete_order_${order.id}`),
+                                Markup.button.callback('❌ Бекор қилиш', `cancel_order_${order.id}`)
+                            ]
+                        ])
+                    );
+                });
+            } else {
+                const myOrders = data.orders.filter(o => o.userId === ctx.from.id && (o.status === 'pending' || o.status === 'accepted'));
+                if (myOrders.length === 0) return ctx.reply('Сизда ҳозирда фаол буюртмалар йўқ.', passengerMenu);
+
+                myOrders.forEach(order => {
+                    const statusText = order.status === 'pending' ? '⏳ Кутилмоқда' : `✅ Қабул қилинди (Хайдовчи: ${order.driverName})`;
+                    ctx.reply(
+                        `📋 Буюртма #${order.id}\n\n📍 Йўналиш: ${order.from} - ${order.to}\nℹ️ Маълумот: ${order.details}\n📊 Ҳолат: ${statusText}`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('❌ Буюртмани бекор қилиш', `passenger_cancel_${order.id}`)]
+                        ])
+                    );
+                });
+            }
+            return;
+        }
+        if (text === '📊 Статистика') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            const data = getData();
+            const user = data.users[ctx.from.id];
+            if (user && user.role === 'driver') {
+                return ctx.reply(`📊 Сизнинг статистикангиз:\n\n✅ Қабул қилинган буюртмалар: ${user.stats.completed}`, driverMenu);
+            }
+            return;
+        }
+        if (text === '📍 Йўналишларни созлаш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('DIRECTION_SCENE');
+        }
+        if (text === '🔄 Ролни ўзгартириш') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.scene.enter('REGISTRATION_SCENE');
+        }
+        if (text === '🤖 Бот ҳақида') {
+            try { await ctx.scene.leave(); } catch (e) {}
+            return ctx.reply(
+                `🤖 Бот ҳақида:\n\nТезкор Taxi - тез ва қулай такси хизмати!\n\nБизнинг хизматларимиз:\n- 🚕 Йўловчи хизмати\n- 📦 Почта хизмати\n\n📞 Қўллаб-quvvatlash: ${settings.support_phone || 'Кўрсатилмаган'}`,
+                driverMenu
+            );
+        }
+        
+        const data = getData();
+        const user = data.users[ctx.from.id];
+        
+        if (text === '▶️ Қолдириб қўйиш') {
+            ctx.wizard.state.carPhoto = user.carPhoto;
+        } else if (ctx.message.photo) {
+            const photos = ctx.message.photo;
+            const photo = photos[photos.length - 1];
+            ctx.wizard.state.carPhoto = photo.file_id;
         }
         
         user.carModel = ctx.wizard.state.carModel;
         user.stateNumber = ctx.wizard.state.stateNumber;
+        user.carPhoto = ctx.wizard.state.carPhoto;
         saveData(data);
         
         await ctx.reply('✅ Машина маълумотлари сақланди!', driverMenu);
@@ -2211,7 +2311,11 @@ bot.action(/accept_(.+)/, async (ctx) => {
         userMessage += `\n🏁 Давлат рақами: ${driver.stateNumber}`;
     }
     
-    bot.telegram.sendMessage(order.userId, userMessage).catch(e => console.error(`Error sending message to user ${order.userId}:`, e.message));
+    if (driver.carPhoto) {
+        bot.telegram.sendPhoto(order.userId, driver.carPhoto, { caption: userMessage }).catch(e => console.error(`Error sending photo to user ${order.userId}:`, e.message));
+    } else {
+        bot.telegram.sendMessage(order.userId, userMessage).catch(e => console.error(`Error sending message to user ${order.userId}:`, e.message));
+    }
 });
 
 bot.action(/ignore_(.+)/, async (ctx) => {
